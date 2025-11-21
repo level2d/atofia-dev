@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid Randomizer</title>
+    <style>
+        :root {
+            --ink: #2e4a55;
+            --border: #cfd8dc;
+            --border-strong: #97bec8;
+            --shell: #f3f8f9;
+            --accent: #d9ebee;
+            --progress: #cfe5e8;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Helvetica Neue", "Segoe UI", system-ui, -apple-system, sans-serif;
+            background: var(--shell);
+            color: var(--ink);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 32px 12px;
+        }
+
+        .page {
+            width: min(1100px, 92vw);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+            color: #56707b;
+            font-size: 14px;
+            letter-spacing: 0.01em;
+        }
+
+        .progress {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 10px;
+            margin-bottom: 26px;
+        }
+
+        .progress-step {
+            min-height: 16px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: #eaf1f3;
+            transition: background-color 180ms ease, border-color 180ms ease;
+        }
+
+        .progress-step.filled {
+            background: var(--progress);
+            border-color: var(--border-strong);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(8, minmax(90px, 1fr));
+            gap: 18px;
+        }
+
+        .cell {
+            position: relative;
+            padding: 14px 18px;
+            background: #fff;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+            text-align: center;
+            cursor: pointer;
+            color: var(--ink);
+            transition:
+                transform 480ms cubic-bezier(0.22, 0.61, 0.36, 1),
+                background-color 220ms ease,
+                color 220ms ease,
+                border-color 220ms ease,
+                box-shadow 220ms ease;
+            user-select: none;
+            will-change: transform;
+        }
+
+        .cell:hover {
+            border-color: #b8c9ce;
+        }
+
+        .cell.active {
+            background: var(--accent);
+            border-color: var(--border-strong);
+            color: #24586d;
+        }
+
+        .grid.is-locked .cell {
+            cursor: default;
+        }
+
+        .cell.wave {
+            animation: wave 650ms ease-out forwards;
+            animation-delay: var(--wave-delay, 0ms);
+        }
+
+        .cell.active.wave {
+            animation: wave-active 650ms ease-out forwards;
+            animation-delay: var(--wave-delay, 0ms);
+        }
+
+        @keyframes wave {
+            0% {
+                background: var(--accent);
+                box-shadow: 0 0 0 0 rgba(36, 88, 109, 0.12);
+                border-color: var(--border-strong);
+            }
+            55% {
+                background: #e9f3f5;
+                box-shadow: 0 12px 26px rgba(36, 88, 109, 0.18);
+            }
+            100% {
+                background: #fff;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+                border-color: var(--border);
+            }
+        }
+
+        @keyframes wave-active {
+            0% {
+                background: var(--accent);
+                box-shadow: 0 0 0 0 rgba(36, 88, 109, 0.12);
+                border-color: var(--border-strong);
+            }
+            55% {
+                background: #e9f3f5;
+                box-shadow: 0 12px 26px rgba(36, 88, 109, 0.18);
+            }
+            100% {
+                background: var(--accent);
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+                border-color: var(--border-strong);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <header>
+            <div>Click any cell to shuffle</div>
+            <div id="status">Ready</div>
+        </header>
+        <div class="progress" id="progress"></div>
+        <div class="grid" id="grid"></div>
+    </div>
+
+    <script>
+        const letters = "ABCDEFGH";
+        const totalSteps = 12;
+        const forwardSteps = 6;
+        const moveDuration = 480; // keep in sync with CSS transform duration
+        const stepDelay = moveDuration + 120; // ms between steps for smoother feel
+        const waveDuration = 650;
+        const waveStagger = 80;
+
+        const grid = document.getElementById("grid");
+        const progressBar = document.getElementById("progress");
+        const status = document.getElementById("status");
+
+        const labels = [];
+        for (let r = 0; r < letters.length; r++) {
+            for (let c = 1; c <= 8; c++) {
+                labels.push(`${letters[r]}${c}`);
+            }
+        }
+
+        const baseOrder = [...labels];
+        let currentOrder = [...baseOrder];
+        let isAnimating = false;
+        let activeId = null;
+        let progressSteps = [];
+        const coordsById = new Map();
+
+        function idToCoord(id) {
+            const row = letters.indexOf(id[0]);
+            const col = parseInt(id.slice(1), 10) - 1;
+            return { row, col };
+        }
+
+        function buildUI() {
+            const frag = document.createDocumentFragment();
+            baseOrder.forEach((label) => {
+                coordsById.set(label, idToCoord(label));
+                const div = document.createElement("div");
+                div.className = "cell";
+                div.textContent = label;
+                div.dataset.id = label;
+                frag.appendChild(div);
+            });
+            grid.appendChild(frag);
+
+            const progressFrag = document.createDocumentFragment();
+            for (let i = 0; i < totalSteps; i++) {
+                const dot = document.createElement("div");
+                dot.className = "progress-step";
+                progressFrag.appendChild(dot);
+            }
+            progressBar.appendChild(progressFrag);
+            progressSteps = Array.from(progressBar.children);
+        }
+
+        function setActiveCell(id) {
+            const cells = grid.querySelectorAll(".cell");
+            cells.forEach((cell) => cell.classList.toggle("active", cell.dataset.id === id));
+        }
+
+        function resetProgress() {
+            progressSteps.forEach((step) => step.classList.remove("filled"));
+        }
+
+        function fillProgress(stepNumber) {
+            progressSteps.forEach((step, idx) => {
+                step.classList.toggle("filled", idx < stepNumber);
+            });
+        }
+
+        function shuffleDifferent(order) {
+            const next = [...order];
+            for (let i = next.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [next[i], next[j]] = [next[j], next[i]];
+            }
+            const isSame = next.every((id, idx) => id === order[idx]);
+            if (isSame) {
+                return shuffleDifferent(order);
+            }
+            return next;
+        }
+
+        function applyOrder(targetOrder) {
+            const items = Array.from(grid.children);
+            const firstRects = new Map(items.map((el) => [el, el.getBoundingClientRect()]));
+
+            const fragment = document.createDocumentFragment();
+            targetOrder.forEach((id) => {
+                const el = grid.querySelector(`[data-id="${id}"]`);
+                fragment.appendChild(el);
+            });
+            grid.appendChild(fragment);
+
+            const lastRects = new Map(items.map((el) => [el, el.getBoundingClientRect()]));
+
+            items.forEach((el) => {
+                const first = firstRects.get(el);
+                const last = lastRects.get(el);
+                const dx = first.left - last.left;
+                const dy = first.top - last.top;
+                el.style.transition = "none";
+                el.style.transform = `translate(${dx}px, ${dy}px)`;
+            });
+
+            // Force reflow, then allow the transition to animate toward the new positions.
+            grid.getBoundingClientRect();
+            items.forEach((el) => {
+                el.style.transition = "";
+                el.style.transform = "";
+            });
+        }
+
+        function buildSequence() {
+            const forward = [];
+            let working = [...currentOrder];
+            for (let i = 0; i < forwardSteps; i++) {
+                working = shuffleDifferent(working);
+                forward.push([...working]);
+            }
+            const backward = [...forward]
+                .slice(0, forwardSteps - 1)
+                .reverse()
+                .map((order) => [...order]);
+            return [...forward, ...backward, [...baseOrder]];
+        }
+
+        function updateStatus(text) {
+            status.textContent = text;
+        }
+
+        async function runSequence(id) {
+            if (isAnimating) return;
+            isAnimating = true;
+            grid.classList.add("is-locked");
+            resetProgress();
+            setActiveCell(id);
+            updateStatus("Animating...");
+
+            const sequence = buildSequence();
+
+            for (let step = 0; step < sequence.length; step++) {
+                const targetOrder = sequence[step];
+                applyOrder(targetOrder);
+                currentOrder = [...targetOrder];
+                fillProgress(step + 1);
+                await new Promise((resolve) => setTimeout(resolve, stepDelay));
+            }
+
+            const waveTime = triggerWave(id);
+            await new Promise((resolve) => setTimeout(resolve, waveTime));
+
+            isAnimating = false;
+            grid.classList.remove("is-locked");
+            updateStatus("Complete. Click any cell to shuffle again.");
+        }
+
+        function triggerWave(originId) {
+            const origin = coordsById.get(originId);
+            if (!origin) return 0;
+
+            const cells = Array.from(grid.children);
+            let farthestDelay = 0;
+
+            cells.forEach((cell) => {
+                const pos = coordsById.get(cell.dataset.id);
+                const distance = Math.abs(pos.row - origin.row) + Math.abs(pos.col - origin.col);
+                const delay = distance * waveStagger;
+                farthestDelay = Math.max(farthestDelay, delay);
+                cell.classList.remove("wave");
+                cell.offsetWidth; // restart animation
+                cell.style.setProperty("--wave-delay", `${delay}ms`);
+                cell.classList.add("wave");
+            });
+
+            const total = farthestDelay + waveDuration + 40;
+            setTimeout(() => {
+                cells.forEach((cell) => cell.classList.remove("wave"));
+                setActiveCell(originId); // keep the clicked cell visibly highlighted
+            }, total);
+            return total;
+        }
+
+        buildUI();
+        resetProgress();
+        updateStatus("Ready");
+
+        grid.addEventListener("click", (event) => {
+            const cell = event.target.closest(".cell");
+            if (!cell || isAnimating) return;
+            activeId = cell.dataset.id;
+            runSequence(activeId);
+        });
+    </script>
+</body>
+</html>
